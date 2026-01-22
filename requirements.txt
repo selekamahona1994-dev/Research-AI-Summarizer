@@ -1,0 +1,6 @@
+pymupdf
+ollama
+pandas
+matplotlib
+wordcloud
+openpyxl

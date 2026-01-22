@@ -1,0 +1,5 @@
+papers/
+*.xlsx
+*.png
+*.txt
+__pycache__/
