@@ -3,89 +3,62 @@ import fitz  # PyMuPDF
 import pandas as pd
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
+from collections import Counter
 import io
 import os
-from groq import Groq  # For online AI processing
+from groq import Groq
 
-# --- PAGE CONFIG ---
+# --- WEB PAGE CONFIGURATION ---
 st.set_page_config(page_title="AI Research Summarizer", layout="wide")
-st.title("🔬 Research-AI-Summarizer Web")
+st.title("🔬 Research-AI-Summarizer")
 
-# --- SIDEBAR: API CONFIG ---
-with st.sidebar:
-    st.header("Settings")
-    # Users provide their own key online, or you can set it in Streamlit Secrets
-    api_key = st.text_input("Enter Groq API Key", type="password")
-    st.info("Get a free key at console.groq.com")
-
-
-# --- FUNCTIONS ---
-def extract_text_from_pdf(uploaded_file):
-    """Extracts text from an uploaded PDF stream."""
-    text = ""
-    pdf_stream = io.BytesIO(uploaded_file.read())
-    with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-        # Extract first 12 and last 5 pages for context
-        target_pages = list(range(min(12, len(doc)))) + list(range(max(0, len(doc) - 5), len(doc)))
-        for p in sorted(set(target_pages)):
-            text += doc[p].get_text()
-    return text
+# --- API SECRET LOGIC ---
+if "GROQ_API_KEY" in st.secrets:
+    api_key = st.secrets["GROQ_API_KEY"]
+else:
+    api_key = st.sidebar.text_input("Enter Groq API Key", type="password")
 
 
-def ai_process_cloud(text, key):
-    """Processes text using Groq Cloud API (Llama 3)."""
+# --- THIS IS THE FUNCTION YOU WERE LOOKING FOR ---
+def ai_process(text, key):
+    """Processes text using the NEW Llama 3.1 model."""
     client = Groq(api_key=key)
-    prompt = f"Summarize this research paper. Identify: 1. METHOD_TYPE 2. KEY_AUTHORS 3. RESEARCH GAP. \n\nText: {text[:8000]}"
+    # Using the updated model name here
     completion = client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[{"role": "user", "content": prompt}]
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": f"Summarize this research: {text[:10000]}"}]
     )
     return completion.choices[0].message.content
 
 
-# --- MAIN APP LOGIC ---
-uploaded_files = st.file_uploader("Upload your Research Papers (PDF)", type="pdf", accept_multiple_files=True)
+# --- INTERFACE ---
+uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
 
-if uploaded_files:
-    if st.button("🚀 Run Analysis"):
-        if not api_key:
-            st.error("Please enter an API Key to start.")
-        else:
-            all_summaries = []
-            combined_text = ""
+if uploaded_files and api_key:
+    if st.button("🚀 Start Analysis"):
+        all_summaries = []
+        all_text = ""
 
-            progress_bar = st.progress(0)
-            for i, file in enumerate(uploaded_files):
-                st.write(f"Processing {file.name}...")
-                text = extract_text_from_pdf(file)
-                combined_text += text
+        for file in uploaded_files:
+            # Extract text
+            pdf_stream = io.BytesIO(file.read())
+            doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            text = "".join([page.get_text() for page in doc[:5]])  # First 5 pages
+            all_text += text
 
-                # AI Summary
-                summary = ai_process_cloud(text, api_key)
-                all_summaries.append({"Filename": file.name, "Summary": summary})
-                progress_bar.progress((i + 1) / len(uploaded_files))
+            # Get AI Summary
+            summary = ai_process(text, api_key)
+            all_summaries.append({"File": file.name, "Summary": summary})
+            st.write(f"✅ Processed {file.name}")
 
-            # --- DISPLAY VISUALS ---
-            st.divider()
-            st.subheader("📊 Research Visualizations")
+        # Show Results
+        st.divider()
+        st.subheader("Summary Table")
+        st.dataframe(pd.DataFrame(all_summaries))
 
-            col1, col2 = st.columns(2)
-            with col1:
-                wc = WordCloud(width=800, height=400, background_color='white').generate(combined_text)
-                fig, ax = plt.subplots()
-                ax.imshow(wc)
-                ax.axis('off')
-                st.pyplot(fig)  # Correct way to show plots in Streamlit
-
-            with col2:
-                df = pd.DataFrame(all_summaries)
-                st.dataframe(df)
-
-            # --- DOWNLOAD RESULTS ---
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Analysis (CSV)",
-                data=csv,
-                file_name="Research_Results.csv",
-                mime="text/csv"
-            )  #
+        st.subheader("Research Word Cloud")
+        wc = WordCloud(background_color='white').generate(all_text)
+        fig, ax = plt.subplots()
+        ax.imshow(wc)
+        ax.axis('off')
+        st.pyplot(fig)
