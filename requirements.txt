@@ -1,7 +1,6 @@
+streamlit
 pymupdf
-ollama
 pandas
 matplotlib
 wordcloud
-openpyxl
-tqdm
+groq
