@@ -8,13 +8,11 @@ import pandas as pd
 from datetime import datetime
 
 
-# --- DATABASE CONNECTION (FETCH & SAVE) ---
+# --- DATABASE CONNECTION ---
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    # Fix for private key newline formatting
     secret_info = dict(st.secrets["gcp_service_account"])
     secret_info["private_key"] = secret_info["private_key"].replace("\\n", "\n")
-
     creds = Credentials.from_service_account_info(secret_info, scopes=scopes)
     return gspread.authorize(creds)
 
@@ -25,21 +23,8 @@ def save_to_database(project_title, solution, count):
         sheet = client.open_by_key(st.secrets["general"]["spreadsheet_id"]).sheet1
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([timestamp, project_title, solution, count])
-        return True
     except Exception as e:
         st.error(f"Save Error: {e}")
-        return False
-
-
-def load_dashboard_data():
-    try:
-        client = get_gspread_client()
-        sheet = client.open_by_key(st.secrets["general"]["spreadsheet_id"]).sheet1
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Dashboard Load Error: {e}")
-        return pd.DataFrame()
 
 
 # --- AI CORE LOGIC ---
@@ -51,14 +36,25 @@ def is_research_paper(text, key):
     return "TRUE" in chat.choices[0].message.content.strip().upper()
 
 
-def analyze_paper(text, filename, key):
+def extract_matrix_data(text, filename, key):
+    """Specific function to get data for the Comparison Table"""
     client = Groq(api_key=key)
-    prompt = f"Analyze {filename}. Headers: Abstract, TOC, Intro, Methodology, Contribution, References, Budget, Gap. TEXT: {text[:14000]}"
-    return client.chat.completions.create(model="llama-3.1-8b-instant",
-                                          messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+    prompt = f"""
+    Analyze the research paper: {filename}
+    Provide a VERY SHORT summary (max 20 words per field) for:
+    1. METHODOLOGY
+    2. KEY FINDING
+    3. PRIMARY RESEARCH GAP
+
+    TEXT: {text[:10000]}
+    Format as: Methodology | Finding | Gap
+    """
+    res = client.chat.completions.create(model="llama-3.1-8b-instant",
+                                         messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+    return res.split("|")
 
 
-def synthesize_solution(gaps, key):
+def synthesize_master_solution(gaps, key):
     client = Groq(api_key=key)
     prompt = f"Synthesize these research gaps into one unified master solution: {gaps}"
     return client.chat.completions.create(model="llama-3.1-8b-instant",
@@ -66,68 +62,60 @@ def synthesize_solution(gaps, key):
 
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Research Architect Pro", layout="wide")
+st.set_page_config(page_title="Research Matrix Pro", layout="wide")
+st.title("🔬 Multi-Paper Research Matrix & Synthesizer")
 
-# Create Tabs
-tab1, tab2 = st.tabs(["🚀 New Analysis", "📊 Research Dashboard"])
+if "GROQ_API_KEY" in st.secrets:
+    api_key = st.secrets["GROQ_API_KEY"]
+else:
+    api_key = st.sidebar.text_input("Groq API Key", type="password")
 
-# --- TAB 1: NEW ANALYSIS ---
-with tab1:
-    st.title("🔬 Research Synthesis Engine")
+uploaded_files = st.file_uploader("Upload up to 10 Academic PDFs", type="pdf", accept_multiple_files=True)
 
-    if "GROQ_API_KEY" in st.secrets:
-        api_key = st.secrets["GROQ_API_KEY"]
-    else:
-        api_key = st.sidebar.text_input("Groq API Key", type="password")
+if uploaded_files and api_key:
+    if st.button("🚀 Generate Comparison Matrix & Solution"):
+        matrix_rows = []
+        all_gaps = ""
+        valid_count = 0
 
-    uploaded_files = st.file_uploader("Upload up to 10 Academic PDFs", type="pdf", accept_multiple_files=True)
+        progress = st.progress(0)
+        for i, file in enumerate(uploaded_files):
+            pdf_bytes = io.BytesIO(file.read())
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            text = "".join([page.get_text() for page in doc[:10]])
 
-    if uploaded_files and api_key:
-        if st.button("🚀 Analyze & Save"):
-            all_analyses = ""
-            gaps_only = ""
-            valid_count = 0
-
-            progress = st.progress(0)
-            for i, file in enumerate(uploaded_files):
-                pdf_bytes = io.BytesIO(file.read())
-                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                text = "".join([page.get_text() for page in doc[:10]])
-
-                if is_research_paper(text, api_key):
-                    st.info(f"✅ Processing: {file.name}")
-                    summary = analyze_paper(text, file.name, api_key)
-                    all_analyses += f"\n--- {file.name} ---\n{summary}\n"
-                    gaps_only += f"\nGap from {file.name}: {summary}\n"
+            if is_research_paper(text, api_key):
+                st.info(f"Analyzing: {file.name}")
+                # Get table data
+                row_data = extract_matrix_data(text, file.name, api_key)
+                if len(row_data) == 3:
+                    matrix_rows.append({
+                        "Paper Name": file.name,
+                        "Methodology": row_data[0].strip(),
+                        "Key Finding": row_data[1].strip(),
+                        "Research Gap": row_data[2].strip()
+                    })
+                    all_gaps += f"Gap from {file.name}: {row_data[2].strip()}\n"
                     valid_count += 1
-                else:
-                    st.error(f"❌ Rejected: {file.name} (Non-Research)")
-                progress.progress((i + 1) / len(uploaded_files))
+            else:
+                st.error(f"❌ Rejected: {file.name} (Non-Research Document)")
+            progress.progress((i + 1) / len(uploaded_files))
 
-            if valid_count > 0:
-                master_sol = synthesize_solution(gaps_only, api_key)
-                st.success("Analysis Complete!")
-                st.subheader("Unified Research Solution")
-                st.write(master_sol)
+        if matrix_rows:
+            st.divider()
+            # 1. THE COMPARISON MATRIX
+            st.header("📊 Research Comparison Matrix")
+            df = pd.DataFrame(matrix_rows)
+            st.table(df)  # Shows a clean, side-by-side table
 
-                # Save to Google Sheets
-                if save_to_database("Master Synthesis", master_sol, valid_count):
-                    st.toast("Saved to Cloud Dashboard!")
+            # 2. THE MASTER SOLUTION
+            st.header("🏁 Unified Research Solution")
+            master_sol = synthesize_solution(all_gaps, api_key)
+            st.success(master_sol)
 
-# --- TAB 2: DASHBOARD ---
-with tab2:
-    st.header("📜 Past Research Projects")
-    st.write("Data fetched from your permanent Google Sheet.")
+            # Save to Cloud
+            save_to_database("Matrix Synthesis", master_sol, valid_count)
 
-    if st.button("🔄 Refresh Dashboard"):
-        df = load_dashboard_data()
-        if not df.empty:
-            # Sort by newest first
-            df = df.iloc[::-1]
-            st.dataframe(df, use_container_width=True)
-
-            # Allow downloading the whole history
+            # Download
             csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download History as CSV", csv, "research_history.csv", "text/csv")
-        else:
-            st.info("No research history found in your Google Sheet yet.")
+            st.download_button("📥 Download Matrix as CSV", csv, "research_matrix.csv", "text/csv")
