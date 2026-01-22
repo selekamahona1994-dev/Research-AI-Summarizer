@@ -1,4 +1,6 @@
 streamlit
 pymupdf
-pandas
 groq
+gspread
+google-auth
+pandas
