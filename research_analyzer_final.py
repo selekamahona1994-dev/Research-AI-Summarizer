@@ -5,52 +5,65 @@ from groq import Groq
 import io
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Multi-Paper Research Architect", layout="wide")
-st.title("🔬 10-Paper AI Research Summarizer & Synthesizer")
-st.write("Upload up to 10 papers. The AI will analyze each and create a unified solution.")
+st.set_page_config(page_title="Academic Research Architect", layout="wide")
+st.title("🔬 10-Paper Research Synthesizer")
+st.markdown("### Upload up to 10 Research Papers to generate a Unified Solution")
 
 # --- API SETUP ---
-# This looks for the key in your Streamlit Cloud Secrets (or local .streamlit/secrets.toml)
 if "GROQ_API_KEY" in st.secrets:
     api_key = st.secrets["GROQ_API_KEY"]
 else:
     api_key = st.sidebar.text_input("Enter Groq API Key", type="password")
 
 
-# --- AI LOGIC ---
+# --- AI CORE FUNCTIONS ---
+def validate_research_paper(text, key):
+    """Checks if the document is actually a research paper."""
+    client = Groq(api_key=key)
+    prompt = f"Is the following text from a formal academic research paper? Answer only 'YES' or 'NO'. \n\nText: {text[:2000]}"
+    chat = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return "YES" in chat.choices[0].message.content.upper()
+
+
 def analyze_paper(text, filename, key):
-    """Processes a single paper using the current Llama 3.1 model."""
+    """Extracts the specific 10 sections requested."""
     client = Groq(api_key=key)
     prompt = f"""
     Analyze the research paper: {filename}
-    Extract and summarize the following sections clearly:
-    - TITLE PAGE & ABSTRACT
-    - TABLE OF CONTENT (TOC)
-    - INTRODUCTION & LITERATURE REVIEW
-    - RESEARCH DESIGN & METHODOLOGY
-    - IMPLICATION & CONTRIBUTION TO KNOWLEDGE
-    - REFERENCE LIST
-    - RESEARCH SCHEDULE & BUDGET
-    - RESEARCH GAP (Identify exactly what is missing or needed)
+    You MUST extract and summarize these specific sections:
+    1. TITLE PAGE & ABSTRACT
+    2. TABLE OF CONTENT (TOC)
+    3. INTRODUCTION & LITERATURE REVIEW
+    4. DESIGN & METHODOLOGY
+    5. IMPLICATION & CONTRIBUTION TO KNOWLEDGE
+    6. REFERENCE LIST
+    7. RESEARCH SCHEDULE & BUDGET
+    8. RESEARCH GAP (What is missing?)
 
-    PAPER TEXT: {text[:15000]} 
+    TEXT: {text[:15000]} 
     """
     chat = client.chat.completions.create(
-        model="llama-3.1-8b-instant",  # FIXED MODEL NAME
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}]
     )
     return chat.choices[0].message.content
 
 
-def synthesize_solution(all_gaps, key):
-    """Combines all gaps into one unified solution."""
+def create_unified_solution(all_gaps, key):
+    """The 'Master Step' - combines 10 gaps into 1 solution."""
     client = Groq(api_key=key)
     prompt = f"""
-    Below are the research gaps found in multiple papers:
+    You are a Lead Scientist. Below are research gaps from 10 different papers:
     {all_gaps}
 
-    TASK: Combine all these gaps and propose ONE unified research solution 
-    that solves these problems at once. Provide a Title, Methodology, and Impact.
+    TASK: Propose ONE unified research project/solution that addresses the gaps of all 10 papers.
+    Provide:
+    - Unified Project Title
+    - Combined Methodology
+    - Expected Global Impact
     """
     chat = client.chat.completions.create(
         model="llama-3.1-8b-instant",
@@ -60,50 +73,47 @@ def synthesize_solution(all_gaps, key):
 
 
 # --- USER INTERFACE ---
-uploaded_files = st.file_uploader("Upload up to 10 Research PDFs", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload PDFs (Max 10)", type="pdf", accept_multiple_files=True)
 
 if uploaded_files and api_key:
     if len(uploaded_files) > 10:
-        st.warning("Only the first 10 papers will be processed.")
-        uploaded_files = uploaded_files[:10]
+        st.error("Please limit your upload to 10 papers.")
+    else:
+        if st.button("🚀 Analyze & Synthesize"):
+            summaries = []
+            gaps_list = ""
 
-    if st.button("🚀 Analyze All & Synthesize Solution"):
-        individual_summaries = []
-        combined_gaps = ""
+            progress = st.progress(0)
 
-        progress_bar = st.progress(0)
+            for i, file in enumerate(uploaded_files):
+                # 1. Read PDF
+                pdf_bytes = io.BytesIO(file.read())
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                full_text = "".join([page.get_text() for page in doc[:20]])  # Scan first 20 pages
 
-        for i, file in enumerate(uploaded_files):
-            st.info(f"Analyzing: {file.name}...")
+                # 2. Validate
+                if validate_research_paper(full_text, api_key):
+                    st.info(f"Validating & Analyzing: {file.name}")
+                    summary = analyze_paper(full_text, file.name, api_key)
+                    summaries.append({"File": file.name, "Analysis": summary})
+                    gaps_list += f"\nGap from {file.name}:\n{summary}\n"
+                else:
+                    st.warning(f"Skipped: {file.name} (Does not appear to be a research paper)")
 
-            # Extract Text safely
-            pdf_bytes = io.BytesIO(file.read())
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            # Get enough text to find budget and references
-            text = "".join([page.get_text() for page in doc[:15]])
+                progress.progress((i + 1) / len(uploaded_files))
 
-            # AI Analysis
-            try:
-                summary = analyze_paper(text, file.name, api_key)
-                individual_summaries.append({"File": file.name, "Analysis": summary})
-                combined_gaps += f"\n--- Gaps from {file.name} ---\n{summary}\n"
-            except Exception as e:
-                st.error(f"Error processing {file.name}: {e}")
+            # --- OUTPUTS ---
+            if summaries:
+                st.divider()
+                st.header("🏁 Unified Research Solution")
+                st.success(create_unified_solution(gaps_list, api_key))
 
-            progress_bar.progress((i + 1) / len(uploaded_files))
+                st.divider()
+                st.header("📑 Individual Summaries")
+                for item in summaries:
+                    with st.expander(f"Analysis for {item['File']}"):
+                        st.markdown(item['Analysis'])
 
-        # --- DISPLAY RESULTS ---
-        st.divider()
-        st.header("🏁 Final Unified Research Solution")
-        final_solution = synthesize_solution(combined_gaps, api_key)
-        st.success(final_solution)
-
-        st.divider()
-        st.header("📑 Detailed Paper Summaries")
-        for item in individual_summaries:
-            with st.expander(f"View Analysis: {item['File']}"):
-                st.markdown(item['Analysis'])
-
-        # --- DOWNLOAD REPORT ---
-        full_report = f"UNIFIED SOLUTION\n{final_solution}\n\n" + combined_gaps
-        st.download_button("📥 Download Full Report", full_report, "Research_Report.txt")
+                # Downloadable Report
+                final_report = "RESEARCH SYNTHESIS REPORT\n\n" + gaps_list
+                st.download_button("📥 Download Full Report", final_report, "Final_Research_Analysis.txt")
