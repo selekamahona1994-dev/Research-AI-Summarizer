@@ -5,6 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from collections import Counter
+from tqdm import tqdm  # Visual Progress Bar
 
 # --- PATH LOGIC ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +21,7 @@ def extract_content(pdf_path):
     text = ""
     try:
         with fitz.open(pdf_path) as doc:
-            # Sampling the paper for AI analysis
+            # Context for AI: First 12 pages and last 5 pages
             target_pages = list(range(min(12, len(doc)))) + list(range(max(0, len(doc) - 5), len(doc)))
             for p in sorted(set(target_pages)):
                 text += doc[p].get_text()
@@ -45,33 +46,31 @@ def ai_process(text):
     return response['response']
 
 
-def generate_pie_chart(methods):
-    print("🥧 Generating Methodology Pie Chart...")
-    counts = Counter(methods)
-    labels = counts.keys()
-    sizes = counts.values()
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=['#ff9999', '#66b3ff', '#99ff99', '#ffcc99'])
-    ax.set_title('Distribution of Research Methodologies')
+def generate_visuals(all_methods, all_cited_authors, combined_text):
+    # 1. Pie Chart
+    print("\n🥧 Generating Methodology Pie Chart...")
+    counts = Counter(all_methods)
+    plt.figure(figsize=(8, 8))
+    plt.pie(counts.values(), labels=counts.keys(), autopct='%1.1f%%', startangle=140,
+            colors=['#ff9999', '#66b3ff', '#99ff99', '#ffcc99'])
+    plt.title('Distribution of Research Methodologies')
     plt.savefig(OUTPUT_PIE)
     plt.close()
 
-
-def generate_citation_chart(author_list):
+    # 2. Bar Chart
     print("📊 Generating Citation Bar Chart...")
-    counts = Counter(author_list).most_common(10)
-    if not counts: return
-    authors, frequencies = zip(*counts)
-    plt.figure(figsize=(12, 6))
-    plt.bar(authors, frequencies, color='skyblue')
-    plt.xticks(rotation=45, ha='right')
-    plt.title('Top 10 Cited Authors/Papers')
-    plt.savefig(OUTPUT_CHART)
-    plt.close()
+    cit_counts = Counter(all_cited_authors).most_common(10)
+    if cit_counts:
+        authors, frequencies = zip(*cit_counts)
+        plt.figure(figsize=(12, 6))
+        plt.bar(authors, frequencies, color='skyblue')
+        plt.xticks(rotation=45, ha='right')
+        plt.title('Top 10 Cited Authors/Papers')
+        plt.tight_layout()
+        plt.savefig(OUTPUT_CHART)
+        plt.close()
 
-
-def generate_wordcloud(combined_text):
+    # 3. Word Cloud
     print("🎨 Generating Word Cloud...")
     wc = WordCloud(width=1200, height=600, background_color='white').generate(combined_text)
     plt.figure(figsize=(10, 5))
@@ -84,21 +83,21 @@ def generate_wordcloud(combined_text):
 def main():
     if not os.path.exists(INPUT_DIR):
         os.makedirs(INPUT_DIR)
-        print(f"Put PDFs in: {INPUT_DIR}");
+        print(f"Folder created at {INPUT_DIR}. Please add PDFs.")
         return
 
     files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.pdf')]
     if not files:
-        print("Folder is empty.");
+        print("No PDFs found. Please check your 'papers' folder.")
         return
 
     all_summaries, all_cited_authors, all_methods = [], [], []
     gaps_collected, all_text_for_wc = "", ""
 
-    print(f"🚀 Analyzing {len(files[:10])} papers...")
+    print(f"🚀 Found {len(files[:10])} papers. Starting AI detection...")
 
-    for file in files[:10]:
-        print(f"Processing: {file}")
+    # THE UPDATED LOOP WITH PROGRESS BAR
+    for file in tqdm(files[:10], desc="Processing Research Papers", unit="paper"):
         path = os.path.join(INPUT_DIR, file)
         text = extract_content(path)
         all_text_for_wc += text
@@ -106,12 +105,11 @@ def main():
         summary = ai_process(text)
         all_summaries.append({"Filename": file, "Full Summary": summary})
 
-        # Extract Methodology for Pie Chart
+        # Data Extraction for Charts
         if "METHOD_TYPE:" in summary:
             method = summary.split("METHOD_TYPE:")[-1].split("\n")[0].strip()
             all_methods.append(method)
 
-        # Extract Authors for Bar Chart
         if "KEY_AUTHORS:" in summary:
             names = [n.strip() for n in summary.split("KEY_AUTHORS:")[-1].split("\n")[0].split(",") if
                      len(n.strip()) > 2]
@@ -120,21 +118,21 @@ def main():
         if "GAP" in summary.upper():
             gaps_collected += f"\nGap from {file}: " + summary.upper().split("GAP")[-1]
 
-    # Generate all visuals
-    generate_wordcloud(all_text_for_wc)
-    generate_citation_chart(all_cited_authors)
-    generate_pie_chart(all_methods)
+    # Generate the 3 Visuals
+    generate_visuals(all_methods, all_cited_authors, all_text_for_wc)
 
-    # Final Synthesis
-    print("🧠 Creating Unified Solution...")
-    sol_prompt = f"Propose one research project that solves all these gaps: {gaps_collected}"
+    # Final Synthesis for Unified Solution
+    print("\n🧠 Synthesizing Unified Research Solution...")
+    sol_prompt = f"Propose one master research project that solves all these gaps: {gaps_collected}"
     final_sol = ollama.generate(model='llama3', prompt=sol_prompt)
 
+    # Save Results
     pd.DataFrame(all_summaries).to_excel(OUTPUT_EXCEL, index=False)
     with open(OUTPUT_SOLUTION, "w", encoding="utf-8") as f:
         f.write(final_sol['response'])
 
-    print(f"\n✅ COMPLETE! Check your folder for Excel, WordCloud, BarChart, and PieChart.")
+    print(f"\n✅ ALL TASKS COMPLETE!")
+    print(f"Reports and 3 charts are saved in: {BASE_DIR}")
 
 
 if __name__ == "__main__":
